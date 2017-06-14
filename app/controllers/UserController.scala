@@ -7,6 +7,7 @@ import scala.concurrent.Future
 import com.unboundid.ldap.sdk._
 import com.unboundid.ldap.sdk.{ Filter => LdapFilter }
 import scala.collection.JavaConversions._
+import play.api.libs.json._
 
 /**
  * This controller creates an `Action` to handle HTTP requests to the
@@ -41,8 +42,25 @@ class UserController @Inject() extends Controller {
   }
   def login = Action {
     implicit request =>
-      val username = request.body.asFormUrlEncoded.get("username").mkString("")
-      val password = request.body.asFormUrlEncoded.get("password").mkString("")
+        println(request.body, request.body.asJson)
+        loginResult(request)
+  }
+  // TODO: Bad practice? Remove returns? https://tpolecat.github.io/2014/05/09/return.html
+  def loginResult(request: Request[AnyContent]): Result = {
+      var json = request.body.asJson
+      var (username, password) = ("", "")
+      try{
+        json.map {data=>
+          print("parsing json: ")
+          username = (data \ "username").as[String]//asFormUrlEncoded.get("username").mkString("")
+          password = (data \ "password").as[String]//asFormUrlEncoded.get("password").mkString("")
+        }
+        println("username", username)
+      }
+      catch{
+        case e:Exception=> 
+          return Status(400)("Error parsing credential json")
+      }
       // Construct Filter to find user
       var findUserfilter: LdapFilter = null
       findUserfilter = LdapFilter.createEqualityFilter("sAMAccountName", username)
@@ -59,44 +77,61 @@ class UserController @Inject() extends Controller {
       catch
       {
         case e:LDAPSearchException=>
-          // TODO Auto-generated catch block
-          Status(400)("Error getting search results")
+          return Status(400)("Error getting search results")
       }
       var userDN: String = null
+      //TODO: Convert to json?
+      var user: SearchResultEntry = null
       //Notifications for search requests counts != 1.
       if (searchResult.getEntryCount() > 1)
       {
-          println("We got more than one Entry for:" + searchRequest.getFilter())
+          return Status(400)("We got more than one Entry for:" + searchRequest.getFilter())
       }
       if (searchResult.getEntryCount() == 0)
       {
-          println("We got No Entries for:" + searchRequest.getFilter())
+          return Status(400)("We got No Entries for:" + searchRequest.getFilter()) 
       }
       // Search for the user's DN
       searchResult.getSearchEntries().toList.foreach{entry =>
           userDN = entry.getDN()
-          println("Found an Entry: " + userDN)
+          user = entry
+          println("Found an Entry: " + entry)
       }
       val userBindRequest: SimpleBindRequest = new SimpleBindRequest(userDN, password)
       // Check for empty usernames/passwords
       if (userBindRequest.getBindDN() == null)
       {
-          println("We got a null for the userBindRequest UserDN and therefore the bind is anonymous !")
+          return Status(400)("We got a null for the userBindRequest UserDN and therefore the bind is anonymous !")
       }
       if (userBindRequest.getPassword() == null)
       {
-          println("We got a null for the userBindRequest Password and therefore the bind is anonymous !")
+          return Status(400)("We got a null for the userBindRequest Password and therefore the bind is anonymous !")
       }
       // Attempt to log the user in
       try
       {
+          println(userDN)
           userConnection.bind(userDN, password)
-          Ok("Success")
+           Ok(Json.obj(
+            "sAMAccountName" -> user.getAttributeValue("sAMAccountName"),
+            "firstName" -> user.getAttributeValue("givenName"), 
+            "lastName" -> user.getAttributeValue("sn"),
+            "company" -> user.getAttributeValue("company"), 
+            "department" -> user.getAttributeValue("department"), 
+            "title" -> user.getAttributeValue("title"),
+            "description" -> user.getAttributeValue("description"), 
+            "officeCity" -> user.getAttributeValue("physicalDeliveryOfficeName"),
+            "state" -> user.getAttributeValue("st"),
+            "email" -> user.getAttributeValue("mail")
+            ))
+          //TODO: Create and pass back JWT & entry; Example from acuts:
+          //var token = authorization.signToken(user);
+          //res.json({ user: user, token: token });
       }
       catch
       {
         case e:LDAPException=>
-          Status(400)("user bind exception")
+          return Status(400)("user bind exception")
       }
   }
 }
