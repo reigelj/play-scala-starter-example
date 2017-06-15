@@ -42,14 +42,13 @@ class UserController @Inject() extends Controller {
   }
   def login = Action {
     implicit request =>
-        println(request.body, request.body.asJson)
         loginResult(request)
   }
   // TODO: Bad practice? Remove returns? https://tpolecat.github.io/2014/05/09/return.html
   def loginResult(request: Request[AnyContent]): Result = {
-      var json = request.body.asJson
       var (username, password) = ("", "")
       try{
+        var json = request.body.asJson
         json.map {data=>
           print("parsing json: ")
           username = (data \ "username").as[String]//asFormUrlEncoded.get("username").mkString("")
@@ -72,7 +71,6 @@ class UserController @Inject() extends Controller {
       try
       {
           searchResult = adminConnection.search(searchRequest)
-          println(searchResult)
       }
       catch
       {
@@ -85,53 +83,38 @@ class UserController @Inject() extends Controller {
       //Notifications for search requests counts != 1.
       if (searchResult.getEntryCount() > 1)
       {
-          return Status(400)("We got more than one Entry for:" + searchRequest.getFilter())
-      }
-      if (searchResult.getEntryCount() == 0)
-      {
-          return Status(400)("We got No Entries for:" + searchRequest.getFilter()) 
+          println("We got more than one Entry for:" + searchRequest.getFilter())
       }
       // Search for the user's DN
-      searchResult.getSearchEntries().toList.foreach{entry =>
-          userDN = entry.getDN()
-          user = entry
-          println("Found an Entry: " + entry)
-      }
-      val userBindRequest: SimpleBindRequest = new SimpleBindRequest(userDN, password)
-      // Check for empty usernames/passwords
-      if (userBindRequest.getBindDN() == null)
-      {
-          return Status(400)("We got a null for the userBindRequest UserDN and therefore the bind is anonymous !")
-      }
-      if (userBindRequest.getPassword() == null)
-      {
-          return Status(400)("We got a null for the userBindRequest Password and therefore the bind is anonymous !")
-      }
       // Attempt to log the user in
       try
       {
-          println(userDN)
-          userConnection.bind(userDN, password)
-           Ok(Json.obj(
-            "sAMAccountName" -> user.getAttributeValue("sAMAccountName"),
-            "firstName" -> user.getAttributeValue("givenName"), 
-            "lastName" -> user.getAttributeValue("sn"),
-            "company" -> user.getAttributeValue("company"), 
-            "department" -> user.getAttributeValue("department"), 
-            "title" -> user.getAttributeValue("title"),
-            "description" -> user.getAttributeValue("description"), 
-            "officeCity" -> user.getAttributeValue("physicalDeliveryOfficeName"),
-            "state" -> user.getAttributeValue("st"),
-            "email" -> user.getAttributeValue("mail")
-            ))
-          //TODO: Create and pass back JWT & entry; Example from acuts:
-          //var token = authorization.signToken(user);
-          //res.json({ user: user, token: token });
+        searchResult.getSearchEntries().toList.foreach{entry =>
+            userDN = entry.getDN()
+            user = entry
+        }
+        println(userDN)
+        userConnection.bind(userDN, password)
+        Ok(Json.obj(
+        "sAMAccountName" -> user.getAttributeValue("sAMAccountName"),
+        "firstName" -> user.getAttributeValue("givenName"), 
+        "lastName" -> user.getAttributeValue("sn"),
+        "company" -> user.getAttributeValue("company"), 
+        "department" -> user.getAttributeValue("department"), 
+        "title" -> user.getAttributeValue("title"),
+        "description" -> user.getAttributeValue("description"), 
+        "officeCity" -> user.getAttributeValue("physicalDeliveryOfficeName"),
+        "state" -> user.getAttributeValue("st"),
+        "email" -> user.getAttributeValue("mail")
+        ))
+        //TODO: Create and pass back JWT & entry; Example from acuts:
+        //var token = authorization.signToken(user);
+        //res.json({ user: user, token: token });
       }
       catch
       {
-        case e:LDAPException=>
-          return Status(400)("user bind exception")
+        case e:Exception=>
+          return Status(401)("Username or password is incorrect")
       }
   }
 }
