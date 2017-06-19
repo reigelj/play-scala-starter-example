@@ -8,6 +8,7 @@ import com.unboundid.ldap.sdk._
 import com.unboundid.ldap.sdk.{Filter => LdapFilter}
 import scala.collection.JavaConversions._
 import play.api.libs.json._
+import play.api.Logger
 
 /**
   * This controller creates an `Action` to handle HTTP requests to the
@@ -20,18 +21,18 @@ class UserController @Inject()(configuration: play.api.Configuration) extends Co
   // passing credentials OpenId- https://stackoverflow.com/questions/39076085/should-i-pass-credentials-via-http-header-or-post-body-as-json-to-rest-api
   // pack4j demo- https://github.com/pac4j/play-pac4j-scala-demo
   private val url = configuration.underlying.getString("ldap.dc")
-  private val port = configuration.underlying.getString("ldap.port")
-  private var adminDN: String = configuration.underlying.getString("ldap.admin_dn")
-  private var adminPass: String = configuration.underlying.getString("ldap.admin_pass")
+  private val port: Int = configuration.underlying.getString("ldap.port").toInt
+  private val adminDN: String = configuration.underlying.getString("ldap.admin_dn")
+  private val adminPass: String = configuration.underlying.getString("ldap.admin_pass")
   private val adminConnection: LDAPConnection = new LDAPConnection()
   private val userConnection: LDAPConnection = new LDAPConnection()
   try {
-    adminConnection.connect(url, 389)
-    userConnection.connect(url, 389)
+    adminConnection.connect(url, port)
+    userConnection.connect(url, port)
   }
   catch {
     case e: Exception =>
-      println("initial connection failed")
+      Logger.error("initial connection failed", e)
   }
 
   def login = Action {
@@ -42,31 +43,32 @@ class UserController @Inject()(configuration: play.api.Configuration) extends Co
   def loginResult(request: Request[AnyContent]): Result = {
     try {
       adminConnection.bind(adminDN, adminPass)
-      println("admin success")
+      Logger.debug("admin success")
     }
     catch {
       case e: Exception =>
-        println("admin bind failed", adminDN, adminPass)
+        Logger.error("admin bind failed", e)
+        Status(500)("Internal Server Error. Admin bind failed.")
     }
     var (username, password) = ("", "")
     try {
-      var json = request.body.asJson
+      val json = request.body.asJson
       json.foreach { data =>
-        print("parsing json: ")
         username = (data \ "username").as[String] //asFormUrlEncoded.get("username").mkString("")
         password = (data \ "password").as[String] //asFormUrlEncoded.get("password").mkString("")
       }
-      println("username", username)
+      Logger.debug("incoming username request from: " + username)
     }
     catch {
       case e: Exception =>
-        return Status(400)("Error parsing credential json")
+        Logger.error("json parse failed", e)
+        Status(400)("Error parsing credential json")
     }
     // Construct Filter to find user
     var findUserfilter: LdapFilter = null
     findUserfilter = LdapFilter.createEqualityFilter(configuration.underlying.getString("ldap.search_name"), username)
     // Create a Search Request given the user's info.
-    var searchRequest: SearchRequest = new SearchRequest(configuration.underlying.getString("ldap.search_group"), SearchScope.SUB, findUserfilter)
+    val searchRequest: SearchRequest = new SearchRequest(configuration.underlying.getString("ldap.search_group"), SearchScope.SUB, findUserfilter)
     searchRequest.setSizeLimit(1) // We will error if we get more than one hit
     var searchResult: SearchResult = null
     //Attempt to search for the user's DN
@@ -74,15 +76,18 @@ class UserController @Inject()(configuration: play.api.Configuration) extends Co
       searchResult = adminConnection.search(searchRequest)
     }
     catch {
+      /*Exception for an invalid search request. Note: This is not the same as being unable to find/auth the user.
+      This is typically caused by an invalid adminConnection.*/
       case e: LDAPSearchException =>
-        return Status(400)("Error getting search results")
+        Logger.error("Unable to get search results: ", e)
+        Status(400)("Error getting search results")
     }
     var userDN: String = null
     //TODO: Convert to json?
     var user: SearchResultEntry = null
     //Notifications for search requests counts != 1.
     if (searchResult.getEntryCount > 1) {
-      println("We got more than one Entry for:" + searchRequest.getFilter)
+      Logger.debug("We got more than one Entry for:" + searchRequest.getFilter)
     }
     // Search for the user's DN
     // Attempt to log the user in
@@ -110,6 +115,9 @@ class UserController @Inject()(configuration: play.api.Configuration) extends Co
     }
     catch {
       case e: Exception =>
+        // This is logging as debug instead of error since it is part of the flow and much more common.
+        // Perhaps it should be classified as an error instead?
+        Logger.debug("Incorrect username or password" + e)
         Status(401)("Username or password is incorrect")
     }
   }
